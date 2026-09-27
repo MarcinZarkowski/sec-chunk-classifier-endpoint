@@ -19,7 +19,13 @@ def handler(event):
         logits = model(**encoded).logits
         probs = torch.sigmoid(logits).cpu().numpy().tolist()
         
-    return {"predictions": probs}
+    # Map the raw probabilities to their actual category names using the model's config
+    predictions = []
+    for row in probs:
+        row_dict = {model.config.id2label[i]: prob for i, prob in enumerate(row)}
+        predictions.append(row_dict)
+        
+    return {"predictions": predictions}
 
 # Start the RunPod serverless worker
 runpod.serverless.start({"handler": handler})
