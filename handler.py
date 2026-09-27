@@ -13,24 +13,44 @@ model = AutoModelForSequenceClassification.from_pretrained(
     torch_dtype=torch.float16
 ).to(device)
 
+reranker_tok = AutoTokenizer.from_pretrained("/reranker")
+reranker_model = AutoModelForSequenceClassification.from_pretrained(
+    "/reranker", 
+    torch_dtype=torch.float16
+).to(device)
+
 def handler(event):
-    # 2. Extract chunks from the incoming API request
-    chunks = event["input"]["chunks"]
+    action = event["input"].get("action", "classify")
     
-    # 3. Run inference on the GPU
-    encoded = tokenizer(chunks, padding=True, truncation=True, max_length=2048, return_tensors="pt").to(device)
+    if action == "rerank":
+        pairs = event["input"]["pairs"]
+        # HuggingFace tokenizers seamlessly handle a list of tuples/lists: [[text1, text2], [text1, text2]]
+        encoded = reranker_tok(pairs, padding=True, truncation=True, max_length=1536, return_tensors="pt").to(device)
+        
+        with torch.no_grad():
+            logits = reranker_model(**encoded).logits
+            # Rerankers (MSELoss) output raw scores, no sigmoid needed
+            scores = logits.squeeze(-1).cpu().numpy().tolist()
+            
+        return {"predictions": scores}
+        
+    elif action == "classify":
+        chunks = event["input"]["chunks"]
+        encoded = tokenizer(chunks, padding=True, truncation=True, max_length=2048, return_tensors="pt").to(device)
+        
+        with torch.no_grad():
+            logits = model(**encoded).logits
+            probs = torch.sigmoid(logits).cpu().numpy().tolist()
+            
+        predictions = []
+        for row in probs:
+            row_dict = {model.config.id2label[i]: prob for i, prob in enumerate(row)}
+            predictions.append(row_dict)
+            
+        return {"predictions": predictions}
     
-    with torch.no_grad():
-        logits = model(**encoded).logits
-        probs = torch.sigmoid(logits).cpu().numpy().tolist()
-        
-    # Map the raw probabilities to their actual category names using the model's config
-    predictions = []
-    for row in probs:
-        row_dict = {model.config.id2label[i]: prob for i, prob in enumerate(row)}
-        predictions.append(row_dict)
-        
-    return {"predictions": predictions}
+    else:
+        return {"error": f"Unknown action: {action}"}
 
 # Start the RunPod serverless worker
 runpod.serverless.start({"handler": handler})
