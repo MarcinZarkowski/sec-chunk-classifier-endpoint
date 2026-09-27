@@ -10,6 +10,8 @@ torch.backends.cuda.matmul.allow_tf32 = True
 tokenizer = AutoTokenizer.from_pretrained("/model")
 model = AutoModelForSequenceClassification.from_pretrained(
     "/model", 
+    torch_dtype=torch.float16
+).to(device)
 
 
 def handler(event):
